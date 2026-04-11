@@ -1,26 +1,49 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
   --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-primary: var(--primary-text);
+  --color-secondary: var(--secondary-text);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-card: var(--card-bg);
+
+  --font-sans: var(--font-inter), sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root {
+  --background: #FFFFFF;
+  --primary-text: #0A0A0A;
+  --secondary-text: #6B7280;
+  --border: #E5E7EB;
+  --accent: #6366F1;
+  --card-bg: #FAFAFA;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+[data-theme="dark"] {
+  --background: #0A0A0A;
+  --primary-text: #FFFFFF;
+  --secondary-text: #9CA3AF;
+  --border: #1F2937;
+  --accent: #818CF8;
+  --card-bg: #111111;
+}
+
+html, body {
+  background-color: var(--background);
+  color: var(--primary-text);
+  font-family: var(--font-sans);
+  @apply transition-colors duration-300;
+}
+
+/* Subtle dark mode noise pattern */
+[data-theme="dark"] body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 24px 24px;
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: -1;
 }
