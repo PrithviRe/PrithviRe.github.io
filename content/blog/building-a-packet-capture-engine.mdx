@@ -1,0 +1,85 @@
+---
+title: Building a Packet Capture Engine
+date: 2026-01-15
+description: What I learned building real-time packet capture into a network monitoring platform — the blocking problem, the threading model, and why packet parsing is a performance design decision.
+tags: [Networking, Python, Systems]
+minutes: 7
+---
+
+Packet capture looks simple in a tutorial: run `sniff(count=10)`, get ten packets, done. Building it into a live platform is where the tutorial ends and the engineering begins. This is the story of the capture engine inside my network security platform — the problems that showed up when capture became a background service instead of a script.
+
+## The naive version, and why it blocks
+
+Scapy's `sniff()` is synchronous. It sits on the interface, collects packets into memory, and only returns when you tell it to stop. That's perfect for a one-off script and fatal for a server: if capture runs inside your API process, every HTTP request handler freezes the moment capture starts. Your dashboard goes dark exactly when you need it most — during an incident.
+
+The first real decision, then, isn't "how do I parse packets." It's "how do I keep capture off the critical path."
+
+## Threading model: one producer, one queue
+
+The fix is to treat capture as a producer that owns the interface, and the API as a consumer that owns the responses. They meet at a queue:
+
+```
+Capture thread ──> parse ──> asyncio queue ──> API ──> WebSocket ──> dashboard
+```
+
+Concretely:
+
+- A dedicated thread runs the capture loop. It owns the network interface and nothing else.
+- Parsed packets are pushed into a thread-safe queue.
+- The async API process consumes the queue and fans events out over WebSockets.
+
+This is a single-producer, single-consumer pattern. It removes locking from the hot path entirely — the producer never waits on the consumer, and the consumer never touches the interface.
+
+The lesson generalizes: **synchronous work that can't be made async belongs on its own thread, with a bounded queue between it and everything else.** If the queue fills, you've learned your consumer is slower than your producer — and you've learned it without deadlocking the process.
+
+## Parsing is a performance floor
+
+Once capture is off the critical path, parsing becomes the new bottleneck. Scapy builds a rich object per packet, and richness costs — every layer is an object allocation, and allocations add up at 10,000 packets a second.
+
+The fix is to parse *selectively*:
+
+1. **Filter at the interface.** Drop packets outside the configured protocols before any inspection.
+2. **Parse lazily.** Extract the fields you need for metrics — timestamps, sizes, protocol, addresses — and only build rich objects when a packet actually triggers inspection.
+3. **Aggregate cheaply.** Bandwidth and health metrics come from incremental counters, not from re-parsing historical captures. Per-packet work stays constant no matter how long the capture runs.
+
+```python
+# inside the capture loop — keep this fast
+def handle(pkt):
+    eth = pkt.eth
+    key = (eth.src, eth.dst, pkt.proto)
+    window[key].bytes += len(pkt)
+    window[key].count += 1
+```
+
+This is the same lesson as the chess engine: the representation determines the cost of the whole system. For packet capture, "the cheapest representation that answers your questions" is a dictionary of counters keyed by flow, not a pile of parsed objects.
+
+## Docker networking and the compose trap
+
+The capture engine needs raw access to a network interface, which containers don't get by default. This ate more debugging time than the feature work:
+
+- The capture service runs with **host networking** — the interface it needs isn't virtualizable.
+- The API, database, and dashboard live behind the compose network.
+- Port exposure and inter-service dependency order are explicit in the compose file.
+
+```yaml
+capture:
+  network_mode: host
+  depends_on:
+    - api
+api:
+  ports: ["8000:8000"]
+  depends_on:
+    - postgres
+```
+
+The meta-lesson is that **deployment topology leaks into feature design.** If I'd planned the compose layout before the capture engine, I'd have saved the afternoon spent reconciling `host` mode with the service discovery the rest of the stack assumed.
+
+## What I'd do differently
+
+Next version, in priority order:
+
+1. **Move parsing to a compiled layer.** Python is fine for orchestration; the per-packet hot path wants something lower. WebAssembly or a small C++/Rust module is the natural next step.
+2. **Add a capture ring buffer** so brief spikes in load are absorbed instead of dropped.
+3. **Make the queue bounded and observable** — a fill indicator turns "we silently dropped traffic" into a visible system health signal.
+
+The capture engine taught me more about systems design than about packets: threading, queues, lazy parsing, and deployment topology are the real subject. The packets are just the excuse to learn them.

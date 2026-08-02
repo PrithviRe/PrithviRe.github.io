@@ -1,0 +1,98 @@
+---
+title: Electronic Stock Exchange Simulator
+subtitle: Concurrent electronic trading engine
+status: In Progress
+year: 2026
+description: A concurrent electronic stock exchange simulator — price-time priority matching for market and limit orders, ACID-compliant execution, and low-latency order books.
+tech: [Java, Spring Boot, PostgreSQL, Redis, Kafka, React]
+github: https://github.com/PrithviRe
+demo: "#"
+featured: true
+order: 2
+---
+
+An exchange is the sharpest possible exercise in concurrency. Orders arrive from everywhere, every one of them expects atomicity, and the difference between a matching engine that works and one that works *correctly* is invisible — until it isn't. This project is a miniature exchange built to understand exactly how far relational databases and good locking discipline can go before you need to invent your own data structure.
+
+## Problem
+
+Why does this exist?
+
+Order books are the heart of every market. The naive version is trivial: keep a list, match the best price, done. The real version has to answer hard questions under load:
+
+- What happens when two orders arrive at the same millisecond for the same price level?
+- How do you keep the ledger consistent when a single trade touches users, portfolios, and audit logs?
+- How do you serve live order book data at low latency while still persisting every event durably?
+- Where does the line between the relational store and the fast path actually fall?
+
+## Architecture
+
+Order placement flows through the engine synchronously; market data fans out asynchronously.
+
+<ArchitectureFlow
+  nodes={[
+    { label: "React", detail: "live order book · portfolio · analytics" },
+    { label: "Spring Boot", detail: "REST · matching engine · ACID boundary" },
+    { label: "Matching Engine", detail: "price-time priority · market & limit" },
+    { label: "Redis", detail: "order book + market data cache" },
+    { label: "Kafka", detail: "async trades · notifications · analytics" },
+    { label: "Postgres", detail: "ledger · audit · historical data" }
+  ]}
+/>
+
+## The core concepts
+
+### ACID
+
+Every trade is a single transaction. Either the order, the trade, both portfolios, and the audit rows all commit together, or none of them do. There is no partial state — an exchange that half-writes a trade is worse than an exchange that rejects it. Trade execution is ACID-compliant end to end, with transactional rollback as the safety net.
+
+### Isolation
+
+Concurrent trades on the same instrument must not observe each other mid-flight. I worked through the four isolation levels against a concrete scenario — two orders, one book, zero lost updates — and the answer was a mix of `SELECT ... FOR UPDATE` on the affected rows and optimistic locking via version columns.
+
+### Locks
+
+The interesting decision is *what* you lock. Lock the whole order book and you serialize everything. Lock a single price level and you keep parallelism between different levels while still protecting the level that is being contested. I lock the specific instrument/price rows the trade touches — row-level locking without ever locking the full book.
+
+### Matching Engine
+
+Price-time priority is the rule: best price first, and for equal prices, earlier orders first. Market orders hit the best available price immediately; limit orders rest on the book until they match.
+
+### Order Book
+
+The book itself is a two-sided structure — bids and asks — kept hot in Redis. Reads never touch Postgres; the database owns the durable truth and the ledger, while Redis owns the millisecond view.
+
+## The match
+
+This is the sequence the whole system is built around:
+
+<OrderBook />
+
+## What I actually learned
+
+### Relational tools go further than expected
+
+`SELECT FOR UPDATE`, optimistic locking, materialized views, window functions, triggers, indexing, and `EXPLAIN ANALYZE` turned PostgreSQL into a real exchange backend. The row-locking strategy handled the concurrency scenarios I threw at it — including a deliberately engineered deadlock, which I then had to prevent.
+
+### The fast path and the durable path are separate jobs
+
+Redis serves the hot order book; Postgres is the ledger of record; Kafka carries trades to analytics and notifications. The matching engine is the only component that has to be both correct and synchronous.
+
+### Deadlocks are a design error, not a runtime surprise
+
+Once I reproduced a deadlock by issuing two overlapping transactions in different orders, the fix was obvious: lock rows in a consistent global order. `EXPLAIN ANALYZE` showed the index that made the second transaction stop blocking on the first.
+
+## Benchmarks
+
+| Scenario | Mechanism | Result |
+| --- | --- | --- |
+| Concurrent market orders, same level | Row locks on instrument/price | No lost trades, no serialized full book |
+| Overlapping updates to one portfolio | Optimistic locking (version column) | Retries resolve conflicts, no overwrites |
+| Order book reads | Redis cache | Millisecond reads, DB untouched |
+| Async trade fan-out | Kafka → analytics/notifications | Decoupled from the matching critical path |
+
+## Lessons Learned
+
+- **Isolation is a product decision** — pick the weakest level that provably preserves your invariants.
+- **Locks are a granularity decision** — too coarse serializes you, too fine deadlocks you.
+- **The ledger is sacred** — every mutating path goes through a transaction; there is no out-of-band write.
+- **Measure with `EXPLAIN ANALYZE`** — indexes are where your "scale problems" live.

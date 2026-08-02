@@ -1,0 +1,107 @@
+---
+title: Bitboards Explained
+date: 2025-12-02
+description: Why the fastest chess engines represent the board as a handful of 64-bit integers, and how a single AND becomes a move generation.
+tags: [C++, Algorithms, Chess]
+minutes: 6
+---
+
+If you've read anything about chess programming, you've seen the word *bitboard* and nodded along without really internalizing it. This is the article that makes it concrete — what a bitboard is, why the bit layout matters, and how bitwise operations replace the loops that make array-based engines slow.
+
+## One bit per square
+
+A chessboard has 64 squares. A `uint64_t` has 64 bits. The mapping is the whole trick:
+
+```cpp
+// Square indexing: a8=0, b8=1, ..., h1=63
+// file = sq % 8, rank = sq / 8
+const uint64_t A_FILE = 0x0101010101010101ULL;
+```
+
+If the bit for square `e4` is set, a piece is on `e4`. That's it. The position isn't a 2D array of pieces; it's a few integers, one per piece type per color:
+
+```cpp
+uint64_t whitePawns, blackPawns;
+uint64_t whiteKnights, /* ... */ ;
+uint64_t occupancy;    // whitePawns | blackPawns | ... | kings
+```
+
+## Why this is fast
+
+Consider "give me all the squares attacked by the white knight on d4." With an array you write a loop over eight candidate offsets and bounds-check each. With bitboards:
+
+```cpp
+uint64_t attacks = knightAttacks[d4] & ~whitePieces;
+```
+
+where `knightAttacks[64]` is a precomputed table built once at startup:
+
+```cpp
+for (int sq = 0; sq < 64; sq++) {
+    uint64_t mask = 0;
+    for (auto [dr, dc] : knightDeltas) {
+        int r = sq/8 + dr, c = sq%8 + dc;
+        if (r >= 0 && r < 8 && c >= 0 && c < 8) mask |= 1ULL << (r*8 + c);
+    }
+    knightAttacks[sq] = mask;
+}
+```
+
+A table read and a mask — no branch, no loop. "All white pieces attacked by that knight" is `knightAttacks[d4] & whitePieces`. Whole questions about the position reduce to a single instruction.
+
+## The bit operations you'll actually use
+
+| Operation | Meaning |
+| --- | --- |
+| `&` | intersection — squares that are both X and Y |
+| `\|` | union — add a piece |
+| `~` | complement — everything that isn't |
+| `x << n`, `x >> n` | shift — the classic way to move a ray of attacks |
+| `& -x` | isolate the lowest set bit |
+| `__builtin_ctzll(x)` | index of the lowest set bit → the square |
+
+A rook attack along a rank, computed directly from the occupancy, is the canonical example:
+
+```cpp
+uint64_t east = (occupancy << 1) & ~A_FILE;   // drop the h-file edge
+```
+
+## Sliding pieces and the problem with lookups
+
+Knights and kings are easy: their attacks don't depend on anything else, so a table keyed by square suffices. Sliders are harder because a rook's attacks depend on *what else* sits on its rank and file. The attack set isn't a function of the square alone — it's a function of the square and the occupancy.
+
+The two standard solutions:
+
+- **Classical rays.** For each square and each of 8 directions, precompute the ray. Then walk the ray until you hit occupancy. Correct and simple, still a loop.
+- **Magic bitboards.** Index a table by `(square, masked occupancy)` with a perfect hash. One multiply, one shift, one table read — the loop becomes a lookup.
+
+```cpp
+uint64_t rookAttacks(uint64_t occ, int sq) {
+    return rookTable[sq][ ( (occ & rookMask[sq]) * rookMagic[sq] ) >> rookShift[sq] ];
+}
+```
+
+The magic constants are found by brute force per square: try candidate multipliers until one maps every distinct occupancy to a unique table index. Finding them is a miniature search problem — fittingly, in a chess engine.
+
+## Composed questions, one instruction each
+
+This is where bitboards stop being neat and start being the *design*:
+
+```cpp
+// Is the black king in check from a white knight?
+bool inKnightCheck = knightAttacks[sqBlackKing] & whiteKnights;
+
+// All legal pawn capture targets for white:
+uint64_t captures = (whitePawns << 7 | whitePawns << 9) & blackPieces & ...;
+
+// Passed pawns: a pawn with no enemy pawn on its own or adjacent file, ahead of it
+uint64_t passed = whitePawns & ~blackFileMasks[file + 1] & ...;
+```
+
+Move generation, attack detection, and even evaluation features become a few lines of integer algebra instead of nested loops. The cost is a mindset shift — you stop thinking "for each square on the board..." and start thinking "which bit mask answers this question?"
+
+## When it's overkill
+
+Bitboards are not universally better. They shine at the narrow task of chess position representation. A generic game-tree search for a different game probably wants a plain array. And the code is gnarlier to debug — a bug prints as a hex integer, not a board. `perft` is the tool that keeps you honest; it verifies your move generation against known node counts at every depth.
+
+For the engine I'm building, bitboards are the difference between searching tens of millions of positions a second and searching hundreds of thousands. The representation is the strategy.

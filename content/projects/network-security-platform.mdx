@@ -1,0 +1,131 @@
+---
+title: Network Security Platform
+subtitle: Modular network monitoring and threat detection platform
+status: In Progress
+year: 2026
+description: A modular network monitoring and threat detection platform integrating packet inspection, device discovery, protocol analysis, and security analytics.
+tech: [Python, FastAPI, React, PostgreSQL, Docker]
+github: https://github.com/PrithviRe
+demo: "#"
+docs: "#"
+featured: true
+order: 1
+---
+
+Network teams usually end up with two kinds of tools: capture tools that know packets but nothing about the network, and graphing dashboards that know the network but nothing about packets. This platform is an attempt to build both into one system — discover what is on a network, watch the traffic in real time, and flag the anomalies a human operator would miss.
+
+## Problem
+
+Why does this exist?
+
+Most self-hosted monitoring setups bolt together a packet sniffer, a ping script, and a dashboard, and none of them share data. Discovery is one-off. Capture is unscoped. "Security" is a port scan run by hand once a quarter.
+
+The gaps:
+
+- **No unified model.** Devices, traffic, and alerts live in separate silos with no common identity.
+- **Discovery is static.** IP/MAC identity and hostname go stale the moment the network changes.
+- **Threat detection is post-hoc.** Nothing correlates suspicious traffic with the device that produced it.
+- **Nothing is reproducible.** A single `docker compose up` should bring up the whole stack.
+
+## Architecture
+
+The system is a vertical pipeline. The packet engine is a long-lived process that feeds an API, which feeds both the detection modules and the persistence layer.
+
+<ArchitectureFlow
+  nodes={[
+    { label: "React", detail: "dashboard · topology · analytics" },
+    { label: "REST API", detail: "FastAPI · async · Dockerized" },
+    { label: "Packet Engine", detail: "asynchronous packet analysis" },
+    { label: "Detection Engine", detail: "six attack detection modules" },
+    { label: "PostgreSQL", detail: "historical analytics · reports" }
+  ]}
+/>
+
+## Features
+
+Each capability below is interactive in the live dashboard.
+
+<Features
+  items={[
+    {
+      name: "Network Discovery",
+      detail: "Identifies every live host on the network with IP/MAC identification, hostname resolution, vendor lookup, and operating system fingerprinting. Devices persist across sessions so the topology is never rebuilt from scratch."
+    },
+    {
+      name: "Packet Inspection",
+      detail: "Asynchronous packet analysis supporting TCP, UDP, DNS, HTTP/HTTPS, and ICMP. Traffic streams to the dashboard in real time over WebSockets instead of polling the database."
+    },
+    {
+      name: "Threat Detection",
+      detail: "Six attack detection modules — ARP spoofing, SYN flood attacks, port scanning, rogue DHCP servers, DNS poisoning, and SSL certificate validation. Each alert is correlated to a device, not just a packet."
+    },
+    {
+      name: "Topology Visualization",
+      detail: "Interactive network map rendering real-time device status, latency, and bandwidth utilization directly on the graph."
+    },
+    {
+      name: "Historical Analytics",
+      detail: "PostgreSQL-backed analytics with bandwidth, latency, jitter, packet loss, and congestion trends — the difference between 'it's down' and 'it's been degrading for an hour.'"
+    }
+  ]}
+/>
+
+## Screenshots
+
+<Screenshot
+  label="nsp.dashboard"
+  caption="Dashboard — live topology with device status and bandwidth."
+/>
+
+<Screenshot
+  label="nsp.threats"
+  caption="Threat detection feed — alerts correlated with source device."
+/>
+
+## Challenges
+
+This is where the interesting work lives.
+
+<Challenge>
+Packet analysis blocks the event loop.
+
+A synchronous capture loop running inside the API process freezes every request handler, so the UI dies the moment analysis starts — which is also the moment you need it most.
+</Challenge>
+
+<Solution>
+Run analysis asynchronously and off the request path.
+
+The packet engine owns the interface on a dedicated thread and pushes parsed flows into a queue. The async API process consumes that queue and fans events out over WebSockets. A synchronous hot path became an asynchronous pipeline, and the dashboard stays responsive at full capture rate.
+</Solution>
+
+<Challenge>
+Detection modules need shared context.
+
+Six detectors firing independently produce noise, not signal. Without a shared view of devices and flows, every module re-derives the same facts and no module sees the correlation that matters.
+</Challenge>
+
+<Solution>
+One event pipeline, many consumers.
+
+Every parsed flow flows through a single normalized pipeline. Detection modules subscribe to it, so ARP-spoofing and SYN-flood alerts both reference the same device record, and the topology reflects what the detectors see.
+</Solution>
+
+<Challenge>
+Docker networking between services.
+
+The packet engine needs raw access to a network interface, which containers don't get by default. Getting host networking, port exposure, and the Postgres dependency to line up took more debugging than the feature work.
+</Challenge>
+
+<Solution>
+Deliberate compose topology.
+
+The capture service runs with host networking; the API, database, and dashboard sit behind the compose network. Service dependencies are explicit, and `docker compose up` reproduces the full stack on any machine.
+</Solution>
+
+## Lessons Learned
+
+- **Raw sockets** — capture is an exercise in buffer management and drop rates before it is anything else.
+- **Packet parsing** — knowing which layers to inspect eagerly and which to defer is a design decision, not a detail.
+- **Network protocols** — you can't build threat detection on protocols you haven't dissected by hand.
+- **Docker networking** — compose topologies leak into feature design; plan the deployment model early.
+- **Performance bottlenecks** — the packet engine taught me to measure before optimizing and to keep hot paths allocation-free.

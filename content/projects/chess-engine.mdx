@@ -1,0 +1,164 @@
+---
+title: Chess Engine
+subtitle: High-performance C++20 engine with bitboards and Zobrist hashing
+status: In Progress
+year: 2026
+description: A chess engine built from first principles in C++20 — 64-bit bitboards, alpha-beta search with quiescence, null-move pruning, iterative deepening, and transposition tables.
+tech: [C++, C++20, Bitboards, UCI, Zobrist Hashing]
+github: https://github.com/PrithviRe
+featured: true
+order: 3
+---
+
+Chess engines are the purest systems-programming problem I know: a move generator that must run tens of millions of times per second, a search that must decide what to look at and in what order, and an evaluation that has to encode "how good is this position" as a number. There is nowhere to hide — if the representation is slow, the whole tree is slow.
+
+## Problem
+
+Why does this exist?
+
+A chess program that plays moves is easy. A chess program that plays *strong* moves requires:
+
+- A representation fast enough to generate moves for millions of positions a second.
+- A search that prunes everything it can prove is irrelevant — and nothing it can't.
+- A move-ordering scheme that makes pruning effective in the first place.
+- An evaluation that turns a position into a score with depth-bounded consistency.
+
+Every one of those is a performance problem dressed up as a chess problem.
+
+## Architecture
+
+UCI is the protocol that lets any GUI talk to the engine. Everything below it is the engine itself.
+
+<ArchitectureFlow
+  nodes={[
+    { label: "UCI", detail: "protocol boundary · go/stop · perft" },
+    { label: "Search", detail: "alpha-beta · ID · NMP · LMR · PVS · quiescence" },
+    { label: "Evaluation", detail: "material · mobility · piece-square" },
+    { label: "Move Generation", detail: "bitboards · legal move loops" },
+    { label: "Position Representation", detail: "bitboards + Zobrist keys" }
+  ]}
+/>
+
+## The board, one integer at a time
+
+### Bitboards
+
+A bitboard is a `uint64_t` — sixty-four bits, one per square, bit *n* set means a piece sits on square *n*. Instead of looping over squares to ask "what's here?", the engine does this:
+
+```cpp
+uint64_t rooks     = board.rooks(WHITE);
+uint64_t occupancy = board.occupied();
+```
+
+Generation becomes bitwise algebra. `rookAttacks = rays | …` — sliding pieces are answered by a handful of masks and shifts instead of an 8-square walk. This is why modern engines can inspect millions of positions per second.
+
+### Magic bitboards
+
+Sliding pieces are the hard part: a rook's attacks depend on the full occupancy of its rank and file. Magic bitboards index a precomputed attack table by `(square, masked occupancy)` using a per-square magic multiplier that perfectly hashes the relevant bits:
+
+```cpp
+uint64_t rookAttacks(uint64_t occ, int sq) {
+    occ &= rookMasks[sq];
+    occ *= rookMagics[sq];
+    occ >>= 64 - rookShift[sq];
+    return rookAttacksTable[sq][occ];
+}
+```
+
+Finding the magic constants is itself a small search problem — brute-force multipliers per square until one has no collisions. The payoff is a loop that becomes a lookup.
+
+## Search
+
+### Iterative deepening
+
+The engine searches depth 1, then 2, then 3, and so on, reusing the previous iteration's best move as the first candidate at the next depth. It costs a little redundant work and buys a lot: the search is interruptible at any moment (UCI `stop`), and each iteration seeds the next with the principal variation.
+
+### Alpha-beta pruning
+
+The full game tree is astronomically large, but most of it is provably irrelevant. Alpha-beta maintains a window: *alpha* is the best score the maximizing side has secured, *beta* the best the minimizing side can allow. The moment a move falls outside the window, the remaining moves at that node are skipped.
+
+```text
+search(depth, alpha, beta)
+  if depth == 0 → quiesce(alpha, beta)
+  for move in moves:
+    score = -search(depth-1, -beta, -alpha)
+    if score >= beta  → return beta   // cut-off: opponent will avoid this line
+    if score > alpha  → alpha = score
+  return alpha
+```
+
+### Transposition tables (Zobrist hashing)
+
+The same position appears constantly across the tree. Zobrist hashing assigns each `(piece, square)` pair a random 64-bit value and XORs them together — the position hash is computed incrementally as moves are made and unmade. That hash indexes a transposition table that stores the search result: best move, depth, score, and bound type. When a position is revisited, the stored result either reuses the score or at minimum replays the best move.
+
+```cpp
+uint64_t hash = 0;
+// on make/unmake:
+hash ^= zobrist[piece][from] ^ zobrist[piece][to];
+```
+
+### Null move pruning
+
+In many positions, giving the opponent a free move still leaves them worse. The engine tries it: skip a move, search the resulting position at reduced depth, and if the opponent's best score still fails high against beta, the whole subtree is refuted. Rejecting a null move costs almost nothing and saves enormous work in quiet positions.
+
+### Quiescence search
+
+Depth limits cut off the search mid-tactics, and a material advantage can look great one ply before it's lost. Quiescence extends the search on captures and promotions only, until the position is quiet. Evaluation happens at quiet positions, not arbitrary leaf depths — this alone fixes most "the engine blundered because the horizon ended" problems.
+
+### Move ordering
+
+Pruning only works if the good moves are tried first. The ordering:
+
+1. **MVV-LVA** — captures first, most valuable victim / least valuable attacker.
+2. **Killer moves** — moves that caused cut-offs at the same depth in sibling nodes.
+3. **History heuristic** — a global counter of how often each move caused a cut-off.
+
+A well-ordered tree searches a fraction of the nodes of a naive one at the same depth.
+
+### LMR (Late Move Reductions)
+
+Moves near the end of a well-ordered list are searched at reduced depth first — if the reduced search still beats alpha, the move gets a full re-search. Reductions are where most of the remaining speedup lives.
+
+### PVS (Principal Variation Search)
+
+Once the first move establishes a good score, the rest of the moves are searched with a *null window* — a zero-width band. Most fail quickly; the one that doesn't gets a full re-search.
+
+## Performance
+
+None of this matters if the engine spends its time on cache misses. Two decisions keep it fast:
+
+- **Cache-friendly layouts** — the board state and the move list are contiguous, and hot tables (magics, piece-square, killers) stay small enough to live in L1/L2.
+- **Incremental everything** — the Zobrist hash, attack maps, and material score update in O(1) on make/unmake instead of being recomputed.
+
+## Correctness and benchmarks
+
+### Perft
+
+Before any search work, `perft` proves move generation is exhaustively correct against published node counts:
+
+```text
+perft(1) = 20
+perft(2) = 400
+perft(3) = 8 902
+perft(4) = 197 281
+perft(5) = 4 865 609
+```
+
+Getting perft to match at depth 5 — including castling, en passant, and promotion edge cases — is the rite of passage before any search code is trusted.
+
+### Self-play
+
+Search quality is measured two ways: node count at fixed depth (lower is better — it means ordering and pruning are working), and strength through self-play games, which surfaces tactical blind spots that perft can't.
+
+## The console
+
+<Chess />
+
+> The board above runs pseudo-legal move generation and simulated search metrics. Move a piece and the evaluation, node count, and principal variation update. The real engine exposes the same values over UCI — depth, nodes, score, and PV.
+
+## Lessons Learned
+
+- **Bitboards are a mentality** — once positions are integers, every other data structure feels like it's lying about the cost of its operations.
+- **Search order is everything** — alpha-beta is only as good as its move ordering; pruning is a reward for knowing what to look at first.
+- **The optimizations compound** — quiescence fixes correctness, null move and LMR cut the tree, transposition tables make the cuts reusable.
+- **Measure before trusting** — perft proves correctness, node counts prove pruning, self-play proves strength. Each is a different kind of evidence.

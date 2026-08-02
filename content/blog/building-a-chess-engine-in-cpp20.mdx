@@ -1,0 +1,140 @@
+---
+title: Building a Chess Engine in C++20
+date: 2025-11-10
+description: How a chess engine actually works — bitboard representation, move generation, alpha-beta search, and the move-ordering tricks that turn a naive player into one that searches tens of millions of positions per second.
+tags: [C++, Systems, Chess]
+minutes: 9
+---
+
+A chess engine is one of the few programs where the performance floor is a correctness requirement. If your move generator is slow, your search tree is small, and your engine is weak. There is no point at which "fast enough" stops mattering — every doubling of move generation speed directly becomes search depth, which directly becomes playing strength.
+
+I built one in C++20 to understand each layer from scratch. This is how it fits together.
+
+## Why bitboards
+
+The first design decision is representation, and it decides the fate of everything downstream. The naive choice is a 2D array of squares — but an array asks the CPU to iterate, and iteration is the enemy of move generation.
+
+A bitboard is a `uint64_t`. Sixty-four bits, one per square. If the bit at index `e4` is set, a white pawn sits there. The whole board is a handful of integers:
+
+```cpp
+struct Position {
+    uint64_t pawns[2];   // 0 = white, 1 = black
+    uint64_t knights[2];
+    uint64_t bishops[2];
+    uint64_t rooks[2];
+    uint64_t queens[2];
+    uint64_t kings[2];
+    uint64_t occupied;   // combined
+    uint64_t side;       // all pieces of the side to move
+    Color turn;
+};
+```
+
+Two properties make this fast:
+
+1. **Set operations are integer operations.** "All pieces that are both white and attacking the king" is `white & kingAttacks`. No loops.
+2. **Lookups replace computation.** Precompute the attack set for a knight on every square once, then move generation is a table read plus a mask.
+
+```cpp
+// Knight on square sq, with friendly pieces removed:
+uint64_t attacks = knightAttacks[sq] & ~position.side;
+```
+
+## Move generation with magic bitboards
+
+Sliding pieces (bishops, rooks, queens) are the hard part. A rook's attacks depend on every piece in its row and column, so a plain lookup keyed by square isn't enough.
+
+The classic solution is *magic bitboards*: index a precomputed attack table by `(square, occupancy)` using a magic multiplier that perfectly hashes the relevant occupancy bits. The result is three lines of code per ray that were once the hottest loop in the engine:
+
+```cpp
+uint64_t rookAttacks(uint64_t occ, int sq) {
+    occ &= rookMasks[sq];
+    occ *= rookMagics[sq];
+    occ >>= 64 - rookShift[sq];
+    return rookAttacksTable[sq][occ];
+}
+```
+
+This is the point where I stopped writing chess code and started writing a lookup table generator. Finding the magic constants is itself a small search problem — for each square, brute-force candidate multipliers until you find one with no collisions.
+
+## Search: alpha-beta, and why ordering decides everything
+
+The game tree is far too large to enumerate. Naive minimax on a 3×3 board is fine; on chess it's dead on arrival. Alpha-beta is the pruning that makes chess searchable: the search keeps a window `(alpha, beta)`, and once a move proves the current position can't improve on alpha, every remaining move is skipped.
+
+```cpp
+int search(Position& pos, int depth, int alpha, int beta) {
+    if (depth == 0) return evaluate(pos);
+    Move moves[256];
+    int n = generateMoves(pos, moves);
+    orderMoves(moves, n, pos);          // captures first!
+    for (int i = 0; i < n; i++) {
+        makeMove(pos, moves[i]);
+        int score = -search(pos, depth - 1, -beta, -alpha);
+        unmakeMove(pos);
+        if (score >= beta) return beta; // cut-off: opponent refutes this line
+        if (score > alpha) alpha = score;
+    }
+    return alpha;
+}
+```
+
+Here's the insight that isn't obvious from the pseudocode: **alpha-beta's effectiveness depends entirely on move ordering.** If the best move is tried first, almost every other move gets cut off immediately. If the best move is tried last, the search degenerates into full minimax. The ordering rules, in priority order:
+
+1. **Captures first**, ordered by MVV-LVA (most valuable victim, least valuable attacker).
+2. **Killer moves** — the moves that caused cut-offs at the same depth in sibling nodes.
+3. **History heuristic** — a global counter of how often each move caused cut-offs.
+
+A well-ordered tree searches a fraction of the nodes a naive one does, at the same depth.
+
+## Late move reductions and PVS
+
+The first move at each node is searched fully. Most of the *other* moves don't need that. Two nearly-free optimizations compound into an order of magnitude:
+
+**Late Move Reductions (LMR).** Moves near the end of a well-ordered list are searched at reduced depth first. If the reduced search fails low, you saved an enormous amount of work. If it doesn't, re-search at full depth.
+
+**Principal Variation Search (PVS).** After the first move establishes a good score, the remaining moves are searched with a null window `(score, score+1)`. Either they fail quickly (you were right, nothing beats the first move) or the one exception gets a full re-search.
+
+Neither is a big constant alone. Together, with decent ordering, they turn a search that barely reaches depth 5 into one that reaches depth 8-9 at tournament time controls.
+
+## Evaluation: turning a position into a number
+
+The search produces scores; the evaluation produces *those* scores at the leaves. A simple-but-solid evaluation is a sum of:
+
+- **Material** — piece values, with small bonuses for pawns that are passed.
+- **Piece-square tables** — a pawn on e4 is worth more than a pawn on a3, and the tables encode that.
+- **Mobility** — the number of legal moves available, which is a rough proxy for activity.
+- **King safety** — a compacting of the classic rule "don't castle into an open file."
+
+```cpp
+int evaluate(const Position& pos) {
+    int score = material(pos) + pst(pos) + mobility(pos);
+    return pos.turn == WHITE ? score : -score;
+}
+```
+
+The last line matters: evaluation must be *relative to the side to move* so that negamax (the `-search(...)` in the search loop) works without special-casing.
+
+## Perft: the debugger you trust
+
+Before any of the search code, you must be sure move generation is *exhaustively* correct. `perft` is the tool: a known set of positions with published move-count totals at each depth. If your engine disagrees with the standard counts at depth 5, your move generator has a bug — castling, en passant, promotion, or pawn capture.
+
+```text
+perft(1) = 20        // starting position
+perft(2) = 400
+perft(3) = 8 902
+perft(4) = 197 281
+perft(5) = 4 865 609
+```
+
+Getting perft to match at depth 5 is a rite of passage. It's also the only kind of correctness you can prove about a search engine before you start measuring nodes-per-second.
+
+## Where the speed actually comes from
+
+Roughly, in order of impact:
+
+1. **Bitboard move generation** — the representation change buys an order of magnitude over arrays.
+2. **Move ordering** — makes alpha-beta prune instead of wander.
+3. **LMR + PVS** — deepen the tree without extra cost per node.
+4. **Representation tricks** — e.g., computing check evasion and pinned-piece masks before generating.
+
+If I were to build the next version, the priorities would be: a transposition table (reusing whole subtrees between iterations), better evaluation (quiet positions — search until nothing tactical is pending), and faster castling/pawn handling. The next article covers bitboards in more depth.
