@@ -29,7 +29,7 @@ export default async function BlogPostPage({ params }: Props) {
   if (!doc) notFound();
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-5 pb-24 pt-10 sm:px-8 sm:pt-14">
+    <main className="mx-auto w-full max-w-4xl px-5 pb-24 pt-10 sm:px-8 sm:pt-14">
       <Link
         href="/blog"
         className="inline-flex items-center gap-1.5 font-mono text-xs text-ink/45 transition-colors hover:text-ink"
@@ -43,12 +43,12 @@ export default async function BlogPostPage({ params }: Props) {
           <span>·</span>
           <span>{doc.minutes} min read</span>
           <span>·</span>
-          <span>{doc.tags.join(" · ")}</span>
+          <span className="text-accent">{doc.tags.join(" · ")}</span>
         </div>
-        <h1 className="mt-3 text-3xl font-bold tracking-tight text-ink sm:text-4xl">
+        <h1 className="mt-3 text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">
           {doc.title}
         </h1>
-        <p className="mt-3 text-lg leading-relaxed text-ink/60">{doc.description}</p>
+        <p className="mt-3 text-lg leading-relaxed text-ink/65">{doc.description}</p>
       </header>
 
       <div className="my-8 border-t border-line/8" />

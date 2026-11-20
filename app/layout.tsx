@@ -20,20 +20,20 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: `${site.name} — Backend Engineer`,
+    default: `${site.name} — Systems, Graphics & AI Engineer`,
     template: `%s — ${site.name}`
   },
   description: site.description,
   authors: [{ name: site.name, url: site.github }],
   openGraph: {
-    title: `${site.name} — Backend Engineer`,
+    title: `${site.name} — Systems, Graphics & AI Engineer`,
     description: site.description,
     type: "website",
     url: site.url
   },
   twitter: {
     card: "summary",
-    title: `${site.name} — Backend Engineer`,
+    title: `${site.name} — Systems, Graphics & AI Engineer`,
     description: site.description
   }
 };

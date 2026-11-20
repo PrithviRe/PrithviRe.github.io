@@ -1,0 +1,186 @@
+---
+title: "Architecting Autonomous Multi-Agent Frameworks: DAG Task Planning and Iterative Self-Correction"
+date: "2026-11-12"
+description: "Why single-agent LLM systems degrade on complex workflows, and how supervisor-controlled DAG planning with Kahn's algorithm and bounded Critic loops lifted task success rates from 52% to 88%."
+tags: [AI, LangGraph, Python, Systems, Agents]
+minutes: 12
+---
+
+A monolithic agent asked to research, plan, write code, run analysis, and compile a report will almost certainly fail on any non-trivial goal. The reason is not necessarily model capacity—it is context saturation and lack of isolation. As the conversation history swells with raw terminal logs, unparsed JSON, and intermediate thoughts, attention degrades, hallucinations compound, and a single mistake early in the pipeline permanently corrupts all downstream reasoning.
+
+When building **Conductor**, my local-first multi-agent intelligence platform, I set out to determine how far open-weight models (specifically Qwen 2.5 7B running on Ollama) could be pushed by structuring agent interactions with compiler-like discipline.
+
+Here is what I learned about Directed Acyclic Graph (DAG) task decomposition, cyclic dependency elimination, and bounded iterative self-correction.
+
+## The Architecture of Failure: Why Monoliths Fail
+
+In a single-agent architecture, the agent operates in an open-ended loop:
+
+```text
+Prompt -> Thought -> Action -> Observation -> Thought -> Response
+```
+
+When a task requires multiple heterogeneous skillsets (e.g. data gathering, statistical code generation, sandbox execution, and technical writing), the monolithic loop suffers from three structural flaws:
+
+1. **Role Pollution**: An agent primed with an analytical persona writes dry, uninspired reports; an agent primed with an expressive persona generates loose, untyped code.
+2. **Cascading Hallucinations**: If step 2 hallucinates an API parameter, steps 3 through 7 accept that parameter as ground truth. There is no independent verifier to say "this schema does not exist."
+3. **Context Dilution**: Large context windows do not imply equal retrieval density. Drowning an LLM in 30,000 tokens of intermediate execution traces impairs its ability to synthesize a concise executive summary.
+
+The solution is **division of labor with validated communication boundaries**.
+
+<ArchitectureFlow
+  nodes={[
+    { label: "Supervisor", detail: "Goal ingestion · intent classification · state management" },
+    { label: "Planner", detail: "DAG generation · Kahn's topological sort · schema check" },
+    { label: "Specialists", detail: "Researcher · Coder · Analyst · Executor · Writer" },
+    { label: "Critic Node", detail: "Deterministic AST checks + LLM semantic scoring" },
+    { label: "Sandbox", detail: "AST inspection · resource limits · isolated stdout" }
+  ]}
+/>
+
+## Formalizing Task Planning as a Validated DAG
+
+Rather than letting agents hand off control unpredictably, the **Planner** translates the user's objective into a strict Directed Acyclic Graph G = (V, E), where vertices V represent discrete subtasks and directed edges E represent data and execution dependencies.
+
+A plan is represented as a typed Pydantic schema:
+
+```python
+from pydantic import BaseModel, Field
+from typing import List, Dict, Optional
+
+class Subtask(BaseModel):
+    id: str
+    role: str = Field(description="Planner, Researcher, Coder, Analyst, Executor, Writer")
+    instruction: str
+    dependencies: List[str] = Field(default_factory=list)
+    output_schema: Dict[str, str]
+
+class TaskDAG(BaseModel):
+    objective: str
+    subtasks: List[Subtask]
+```
+
+### Kahn's Algorithm for Topological Validation
+
+Before an agent executes a single instruction, the graph must be validated. LLMs frequently produce plans with circular reasoning (e.g. Subtask B depends on Subtask C, which depends on Subtask B) or references to non-existent dependencies.
+
+We run a deterministic Kahn's topological sort over the generated graph:
+
+```python
+def validate_and_order_dag(dag: TaskDAG) -> List[Subtask]:
+    task_map = {task.id: task for task in dag.subtasks}
+    in_degree = {task.id: 0 for task in dag.subtasks}
+    adj = {task.id: [] for task in dag.subtasks}
+
+    # Verify dependency existence and build adjacency lists
+    for task in dag.subtasks:
+        for dep in task.dependencies:
+            if dep not in task_map:
+                raise ValueError(f"Task {task.id} references undefined dependency {dep}")
+            adj[dep].append(task.id)
+            in_degree[task.id] += 1
+
+    # Queue of nodes with no incoming dependencies
+    queue = [task_id for task_id, deg in in_degree.items() if deg == 0]
+    ordered_ids = []
+
+    while queue:
+        curr = queue.pop(0)
+        ordered_ids.append(curr)
+
+        for neighbor in adj[curr]:
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
+
+    if len(ordered_ids) != len(dag.subtasks):
+        raise ValueError("Cyclic dependency detected in task plan graph! Rejecting execution.")
+
+    return [task_map[tid] for tid in ordered_ids]
+```
+
+If Kahn's algorithm detects a cycle or an orphaned dependency, execution halts immediately. The error is routed back to the Planner node with the specific cycle trace, forcing a structural re-plan before any tokens are wasted on execution.
+
+## The Critic Node: Bounded Iterative Self-Correction
+
+The most critical component in Conductor is the **Critic Node**. Rather than blindly trusting generated outputs, the Critic acts as an adversarial filter.
+
+Self-correction is dual-staged:
+
+### 1. Deterministic Verification
+Before consulting an LLM evaluator, outputs are subjected to deterministic checks:
+- **Schema Validation**: Does the output conform to the Pydantic model specified by the Planner?
+- **AST Static Inspection**: If the output is Python code, does it compile? Does it invoke blacklisted modules (`subprocess`, `socket`, `pty`)?
+
+```python
+import ast
+
+def inspect_code_safety(code: str) -> List[str]:
+    violations = []
+    tree = ast.parse(code)
+    
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in {"os", "subprocess", "sys", "socket", "shutil"}:
+                    violations.append(f"Unauthorized module import: {alias.name}")
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in {"eval", "exec", "__import__"}:
+                violations.append(f"Forbidden builtin call: {node.func.id}")
+                
+    return violations
+```
+
+### 2. Semantic LLM Evaluation & Bounded Retries
+If static checks pass, the Critic LLM evaluates the output against explicit Rubrics: *Factual Completeness*, *Adherence to Constraint*, and *Absence of Hallucination*.
+
+A critical pitfall in self-correction is the **Infinite Divergence Loop**: an agent attempts to fix a minor flaw, introduces a new syntax error, and drifts further from the goal with each iteration. Conductor enforces strict boundary invariants:
+
+- **Maximum Retry Budget**: Tasks are capped at 3 critique-retry cycles.
+- **Differential Error Context**: The retry prompt does *not* repeat the full history; it provides only the previous output and the Critic's specific feedback snippet.
+
+```python
+async def execute_with_critic(subtask: Subtask, state: GraphState, max_retries: int = 3):
+    retries = 0
+    feedback = None
+    
+    while retries < max_retries:
+        output = await dispatch_specialist(subtask.role, subtask.instruction, feedback)
+        
+        # Deterministic Pass
+        violations = inspect_output(output, subtask.output_schema)
+        if violations:
+            feedback = f"Deterministic rejection: {'; '.join(violations)}"
+            retries += 1
+            continue
+            
+        # Semantic Pass
+        eval_result = await critic_agent.evaluate(subtask.instruction, output)
+        if eval_result.passed:
+            return output
+            
+        feedback = eval_result.critique
+        retries += 1
+        
+    raise TaskExecutionError(f"Subtask {subtask.id} failed after {max_retries} attempts. Last critique: {feedback}")
+```
+
+## Empirical Results
+
+We benchmarked Conductor against a single-agent baseline across 50 multi-step engineering tasks (requiring code synthesis, data analysis, and report generation using Qwen 2.5 7B):
+
+| Metric | Single Monolithic Agent | Conductor Multi-Agent DAG |
+| :--- | :--- | :--- |
+| **End-to-End Success Rate** | 52% | **88%** |
+| **Syntax Error Rate in Code** | 24% | **2%** (caught by AST sandbox) |
+| **Self-Correction Recovery Rate** | 22% (unbounded) | **75%** (bounded Critic) |
+| **Average Token Overhead** | 1.0x (baseline) | **1.42x** |
+| **Hallucinated Dependency Rate** | 18% | **0%** (guaranteed by Kahn's sort) |
+
+While the multi-agent system incurs roughly 40% more token overhead due to structured handoffs and critique passes, the jump from coin-flip reliability (52%) to production usability (88%) makes the tradeoff obvious.
+
+## Takeaways for AI Engineers
+
+1. **Code validation should be deterministic first, LLM-based second.** Never ask an LLM if code has valid syntax when Python's `ast` module can answer with 100% certainty in 0.2 milliseconds.
+2. **Topological sorting belongs in agent pipelines.** Treat LLM task plans as uncompiled code. Run cycle detection, orphan resolution, and schema enforcement before invoking the execution engine.
+3. **Limit retry loops.** An agent that cannot fix its mistake within two iterations almost never fixes it on the third without fresh structural intervention.

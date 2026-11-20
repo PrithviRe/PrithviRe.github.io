@@ -1,0 +1,58 @@
+---
+title: Boids Flocking Simulation
+subtitle: Emergent flocking with spatial hashing and GPU instancing
+status: Finished
+year: 2026
+description: Craig Reynolds' emergent flocking model simulating 7,000+ interactive boids at 60+ FPS using allocation-free spatial hashing and GPU hardware instancing.
+tech: [C++17, OpenGL, Spatial Hashing, GPU Instancing, GLSL, GLFW, CMake]
+github: https://github.com/PrithviRe/BoidsSimulator
+featured: false
+order: 5
+---
+
+Flocking is the canonical example of emergence — three simple local rules (separation, alignment, cohesion) produce complex, lifelike group behavior with no central coordinator. The challenge isn't implementing the rules; it's making them fast enough to run on thousands of agents in real time.
+
+## Problem
+
+The naive approach — every boid checks every other boid — is O(N²). At 7,000 boids, that's 49 million distance checks per frame. At 60 FPS, the simulation needs to complete all physics in under 16ms on a single CPU thread. The rendering pipeline also needs to handle thousands of oriented, color-tinted triangles without drowning in draw calls.
+
+## Architecture
+
+<ArchitectureFlow
+  nodes={[
+    { label: "Input", detail: "cursor position · food/scatter impulse" },
+    { label: "Spatial Hash", detail: "allocation-free grid · O(N) neighbor queries" },
+    { label: "Flocking Rules", detail: "separation · alignment · cohesion" },
+    { label: "Physics Update", detail: "velocity integration · speed clamping" },
+    { label: "GPU Instancing", detail: "per-instance orientation + color · single draw call" }
+  ]}
+/>
+
+## Spatial hashing
+
+The key optimization is a uniform spatial hash grid that reduces neighbor queries from O(N²) to O(N). The grid uses linked-list bucket arrays (`m_head` and `m_next`) — no heap allocations in the hot loop, no `std::vector` resizing, no hash map overhead. Each boid hashes to a cell; neighbor queries check only the 9 adjacent cells.
+
+```cpp
+int cell = hashPosition(boid.x, boid.y);
+m_next[boidIndex] = m_head[cell];
+m_head[cell] = boidIndex;
+```
+
+The entire grid rebuilds every frame by clearing `m_head` and re-inserting — cheaper than maintaining sorted structures.
+
+## GPU instancing
+
+Instead of issuing 7,000+ individual draw calls, the renderer uses `glDrawArraysInstanced` with a single triangle mesh. Each instance carries per-boid data — position, orientation angle, and a speed-based gradient color — streamed through a dynamic vertex buffer. One draw call renders the entire flock.
+
+## Interactive physics
+
+The simulation supports real-time cursor interaction:
+
+- **Food attraction** — boids steer toward the cursor position with a configurable attraction radius.
+- **Scatter impulse** — a click sends a radial repulsive force, dispersing the flock and watching it reconverge.
+
+## Lessons Learned
+
+- **Allocation-free data structures** — the linked-list spatial hash outperforms `std::unordered_map` by avoiding heap allocation entirely in the hot path.
+- **Instancing pays for itself** — GPU instancing reduced draw call overhead by ~99%, making the rendering pipeline negligible compared to physics.
+- **Emergence is fragile** — small changes to separation/alignment/cohesion weights produce dramatically different behavior. Tuning is an art.

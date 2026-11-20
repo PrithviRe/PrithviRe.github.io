@@ -1,0 +1,89 @@
+---
+title: Conductor
+subtitle: Autonomous multi-agent intelligence platform
+status: In Progress
+year: 2026
+description: A local-first, supervisor-controlled multi-agent framework with 8 specialized roles, DAG-based task planning, iterative self-correction, and sandboxed code execution.
+tech: [Python, LangGraph, FastAPI, Streamlit, Ollama, ChromaDB, SQLite, Pydantic]
+github: https://github.com/PrithviRe/Conductor
+featured: true
+order: 1
+---
+
+Building one agent that can follow instructions is a solved problem. Building a *system* of agents that can decompose an ambiguous goal into a plan, distribute subtasks to specialists, correct their own mistakes, and produce a coherent final output — that's the hard part. Conductor is a local-first multi-agent orchestration framework designed to understand how far you can push autonomous problem-solving with open-weight models running on commodity hardware.
+
+## Problem
+
+Why does this exist?
+
+Single-agent architectures hit a wall fast. A monolithic agent asked to research, plan, code, analyze, and write will hallucinate, lose context, and fail silently. The failure modes compound — there's no separation of concerns, no feedback loop, and no way to know *which* step went wrong.
+
+The gaps:
+
+- **No task decomposition.** A single prompt doesn't encode dependencies between subtasks.
+- **No specialization.** One agent trying to be a researcher, coder, and critic at once does all three poorly.
+- **No self-correction.** When an agent fails, there's no structured mechanism to diagnose and retry.
+- **No isolation.** Generated code runs with full system access — one bad `os.remove` and the host is compromised.
+
+## Architecture
+
+The supervisor sits at the center. Every task flows through planning, assignment, execution, and critique before it's accepted.
+
+<ArchitectureFlow
+  nodes={[
+    { label: "Streamlit", detail: "command center · DAG view · traces · reports" },
+    { label: "Supervisor", detail: "task routing · agent selection · final assembly" },
+    { label: "Planner", detail: "DAG generation · topological sort · schema validation" },
+    { label: "Specialist Agents", detail: "Researcher · Coder · Analyst · Executor · Writer" },
+    { label: "Critic", detail: "deterministic + LLM validation · bounded retry loops" },
+    { label: "ChromaDB + SQLite", detail: "vector memory · task state · document store" }
+  ]}
+/>
+
+## The agent roster
+
+Eight specialized roles, each with a constrained scope:
+
+- **Planner** — decomposes goals into validated DAGs using Kahn's topological sort. Every plan is checked for acyclicity, schema integrity, and dependency resolution before execution begins.
+- **Supervisor** — routes tasks to the right specialist, monitors execution state, and assembles final outputs.
+- **Researcher** — retrieves and synthesizes information from the vector store and ingested documents.
+- **Coder** — generates Python code that runs inside the sandbox.
+- **Analyst** — processes data, runs statistical analysis, and produces structured findings.
+- **Executor** — runs sandboxed code and captures outputs.
+- **Critic** — the quality gate. A deterministic-plus-LLM validation node that enforces bounded iterative self-correction loops.
+- **Writer** — compiles agent outputs into coherent Markdown reports.
+
+## Self-correction
+
+The Critic is the most interesting piece. It's not just an LLM judging outputs — it's a hybrid node:
+
+1. **Deterministic checks** — schema validation, type checking, output format verification.
+2. **LLM evaluation** — semantic quality, factual consistency, completeness scoring.
+3. **Bounded retries** — failed tasks re-enter the pipeline with error context, up to a configurable limit.
+
+This elevated task success rates from 52% (single-agent baseline) to 88%, with recovery rates reaching 75% on tasks that initially failed.
+
+## The sandbox
+
+Generated code runs in an isolated Python execution environment:
+
+- **AST static inspection** — the Abstract Syntax Tree is parsed before execution to block unauthorized imports, system calls, and network operations.
+- **Resource limits** — CPU time and memory are capped per execution.
+- **No side effects** — the sandbox captures stdout/stderr and return values without touching the host filesystem.
+
+## The command center
+
+The Streamlit dashboard provides real-time visibility into the entire orchestration:
+
+- **Interactive Mermaid DAG rendering** — see the task plan as a directed graph, with node status updating in real time.
+- **Agent execution traces** — follow each agent's reasoning, inputs, and outputs step by step.
+- **Vector document ingestion** — upload documents that become available to the Researcher agent.
+- **Downloadable Markdown reports** — the Writer's final output, ready to export.
+
+## Lessons Learned
+
+- **Specialization beats generalization** — eight narrow agents consistently outperform one broad agent, even when the narrow agents use the same underlying model.
+- **Plans need validation** — a DAG that looks right can have cycles, missing dependencies, or schema violations. Kahn's sort catches what eyeballing misses.
+- **Self-correction needs bounds** — infinite retry loops waste tokens and diverge. Bounded retries with error context converge.
+- **Sandboxing is non-negotiable** — the first time generated code tried to `import subprocess`, the sandbox paid for itself.
+- **Local-first is viable** — Qwen 2.5 7B through Ollama handles the routing and specialist tasks well enough that cloud APIs aren't required.

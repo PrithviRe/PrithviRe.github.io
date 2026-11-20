@@ -1,14 +1,13 @@
 ---
 title: Electronic Stock Exchange Simulator
 subtitle: Concurrent electronic trading engine
-status: In Progress
+status: Finished
 year: 2026
 description: A concurrent electronic stock exchange simulator — price-time priority matching for market and limit orders, ACID-compliant execution, and low-latency order books.
-tech: [Java, Spring Boot, PostgreSQL, Redis, Kafka, React]
-github: https://github.com/PrithviRe
-demo: "#"
+tech: [Java, Spring Boot, PostgreSQL, Redis, Kafka, RabbitMQ, React, Docker]
+github: https://github.com/PrithviRe/Stock-Exchange-Simulator
 featured: true
-order: 2
+order: 3
 ---
 
 An exchange is the sharpest possible exercise in concurrency. Orders arrive from everywhere, every one of them expects atomicity, and the difference between a matching engine that works and one that works *correctly* is invisible — until it isn't. This project is a miniature exchange built to understand exactly how far relational databases and good locking discipline can go before you need to invent your own data structure.

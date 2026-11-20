@@ -1,13 +1,13 @@
 ---
 title: Chess Engine
 subtitle: High-performance C++20 engine with bitboards and Zobrist hashing
-status: In Progress
+status: Finished
 year: 2026
 description: A chess engine built from first principles in C++20 — 64-bit bitboards, alpha-beta search with quiescence, null-move pruning, iterative deepening, and transposition tables.
-tech: [C++, C++20, Bitboards, UCI, Zobrist Hashing]
-github: https://github.com/PrithviRe
+tech: [C++20, Bitboards, UCI, Zobrist Hashing, Alpha-Beta]
+github: https://github.com/PrithviRe/Stockshark
 featured: true
-order: 3
+order: 4
 ---
 
 Chess engines are the purest systems-programming problem I know: a move generator that must run tens of millions of times per second, a search that must decide what to look at and in what order, and an evaluation that has to encode "how good is this position" as a number. There is nowhere to hide — if the representation is slow, the whole tree is slow.

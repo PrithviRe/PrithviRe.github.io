@@ -1,0 +1,40 @@
+---
+title: Particle Simulator
+subtitle: 100K+ interactive particles with additive blending
+status: Finished
+year: 2026
+description: A 2D particle dynamics simulation running 100,000+ interactive particles simultaneously at 60+ FPS with cursor attraction, repulsion, and additive blending.
+tech: [C++17, OpenGL, Point Sprites, Additive Blending, GLSL, GLFW]
+github: https://github.com/PrithviRe/ParticleSimulator
+featured: false
+order: 9
+---
+
+Particle systems are the simplest form of large-scale simulation — each particle has a position, velocity, and lifetime, and the visual result comes from rendering hundreds of thousands of them with the right blending mode.
+
+## Architecture
+
+<ArchitectureFlow
+  nodes={[
+    { label: "Particle Pool", detail: "preallocated · no runtime allocation" },
+    { label: "Physics Update", detail: "cursor forces · kinematic decay" },
+    { label: "Buffer Upload", detail: "glBufferSubData · dynamic VBO" },
+    { label: "Point Sprite Render", detail: "gl_PointCoord · additive blending" }
+  ]}
+/>
+
+## Implementation
+
+**Preallocated buffers** — the particle pool is fixed-size, allocated once at startup. No `new`, no `std::vector::push_back` in the hot loop. Dead particles are recycled by overwriting their state.
+
+**Dynamic vertex streaming** — `glBufferSubData` uploads the live particle positions each frame into a persistent VBO. The GPU renders them as hardware point sprites using `gl_PointCoord` for per-fragment circular falloff.
+
+**Additive blending** — `GL_SRC_ALPHA, GL_ONE` causes overlapping particles to brighten rather than occlude, producing the characteristic glow effect where particle density is highest.
+
+**Interactive forces** — radial inverse-distance cursor attraction pulls particles inward; a click triggers a repulsive impulse that sends them scattering. Lifetime decay gradually fades and respawns particles.
+
+## Lessons Learned
+
+- **Point sprites scale** — hardware point sprites avoid the geometry overhead of billboarded quads entirely.
+- **Additive blending is free visual complexity** — overlapping particles create emergent light effects with no extra computation.
+- **Preallocated pools eliminate GC pauses** — fixed-size arrays with index recycling keep the frame time flat.

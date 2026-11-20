@@ -1,0 +1,35 @@
+---
+title: Portfolio Analyzer
+subtitle: AI-powered stock portfolio analysis with Gemini
+status: Finished
+year: 2025
+description: An AI-powered portfolio analysis application using real-time stock data, Firebase authentication, and Gemini AI for personalized Buy/Hold/Sell recommendations.
+tech: [Flutter, Flask, Firebase, Gemini AI, Zerodha API]
+github: https://github.com/PrithviRe/Portfolio-Analyzer
+featured: false
+order: 11
+---
+
+Stock portfolio management is a problem of information overload — hundreds of tickers, real-time price feeds, and market signals that need to be synthesized into actionable decisions. This app brings AI to the analysis loop.
+
+## Architecture
+
+<ArchitectureFlow
+  nodes={[
+    { label: "Flutter App", detail: "portfolio view · charts · AI insights" },
+    { label: "Flask Backend", detail: "API orchestration · data aggregation" },
+    { label: "Firebase", detail: "authentication · user data" },
+    { label: "Zerodha API", detail: "real-time & historical market data" },
+    { label: "Gemini AI", detail: "Buy/Hold/Sell analysis · rebalancing" }
+  ]}
+/>
+
+## Implementation
+
+The Flutter frontend provides a portfolio dashboard with real-time price tracking and interactive charts. Firebase handles user authentication and secure portfolio storage. The Flask backend aggregates data from Zerodha APIs — both real-time quotes and historical price series — and feeds it to Gemini AI, which generates personalized Buy/Hold/Sell insights and portfolio rebalancing suggestions based on the user's holdings and market conditions.
+
+## Lessons Learned
+
+- **LLMs need structured input** — Gemini's analysis quality scales directly with how well the portfolio data is formatted before the prompt.
+- **Real-time data is a caching problem** — Zerodha rate limits require intelligent caching and stale-while-revalidate patterns.
+- **Cross-platform Flutter** — a single codebase for iOS and Android, but platform-specific edge cases (especially around secure storage) still require attention.

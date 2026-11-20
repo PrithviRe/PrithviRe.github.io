@@ -1,0 +1,57 @@
+---
+title: Mini Ray Marcher
+subtitle: Real-time GPU ray marching with SDFs and CSG
+status: Finished
+year: 2026
+description: A real-time GPU ray marcher rendering 3D procedural scenes per-pixel via signed distance functions, constructive solid geometry, and advanced lighting.
+tech: [C++17, OpenGL, GLSL, SDF, CSG, CMake]
+github: https://github.com/PrithviRe/MiniRayMarcher
+featured: false
+order: 6
+---
+
+Ray marching is the inverse of polygon rendering — instead of projecting triangles onto a screen, you march rays from the camera into a scene defined entirely by mathematical functions. No meshes, no vertices, no triangles. Every surface exists as an equation.
+
+## Problem
+
+Traditional rasterization needs geometry. Ray marching needs only a function that answers "how far is the nearest surface from this point?" — a Signed Distance Function (SDF). The challenge is making that evaluation fast enough to run per-pixel, every frame, with lighting, shadows, and ambient occlusion.
+
+## Architecture
+
+<ArchitectureFlow
+  nodes={[
+    { label: "C++ Host", detail: "window · camera · uniforms" },
+    { label: "Fullscreen Quad", detail: "vertex shader passes UV coordinates" },
+    { label: "Fragment Shader", detail: "per-pixel ray marching · SDF evaluation" },
+    { label: "Lighting Engine", detail: "Blinn-Phong · soft shadows · AO" },
+    { label: "Scene Selector", detail: "three procedural scenes" }
+  ]}
+/>
+
+## Signed distance functions
+
+The scene is defined by composing primitive SDFs — spheres, boxes, planes, tori — using CSG operators:
+
+- **Union** — combine two shapes.
+- **Subtraction** — carve one shape out of another.
+- **Intersection** — keep only the overlap.
+- **Smooth minimum (`smin`)** — blend shapes organically, producing metaball-like morphing.
+
+## Lighting
+
+The lighting engine goes beyond basic diffuse shading:
+
+- **Blinn-Phong specular** — sharp highlights from a half-vector calculation.
+- **Numerical normals** — surface normals computed via tetrahedron gradient sampling of the SDF, no analytical derivatives needed.
+- **Soft penumbra shadows** — ray-marched shadows with a penumbra factor that softens edges based on closest-pass distance.
+- **Multi-tap ambient occlusion** — samples along the normal direction estimate how much surrounding geometry occludes each point.
+
+## 6-DOF camera
+
+A fly camera with WASD keyboard integration and mouse look controls provides full six degrees of freedom across three procedurally rendered scenes.
+
+## Lessons Learned
+
+- **SDFs are composable** — complex geometry emerges from simple function composition, not complex mesh editing.
+- **The GPU is a massively parallel ray marcher** — a fullscreen fragment shader evaluates millions of rays simultaneously.
+- **Soft shadows are cheap** — the penumbra trick adds almost no cost to the shadow march but dramatically improves visual quality.

@@ -1,0 +1,35 @@
+---
+title: STM32 Weather Station
+subtitle: Embedded IoT weather monitoring with cloud visualization
+status: Finished
+year: 2025
+description: An embedded weather monitoring system using the STM32 B-L476E-IOT01A2 IoT development kit with real-time LCD display and ThingSpeak cloud visualization.
+tech: [Embedded C, STM32, IoT, I2C, ThingSpeak]
+github: https://github.com/PrithviRe/stm32-weather-station
+featured: false
+order: 10
+---
+
+Embedded systems are where software meets hardware constraints — limited memory, no operating system, and real-time deadlines that a web server never has to think about. This project is a weather station built on the STM32 B-L476E-IOT01A2 IoT development kit.
+
+## Architecture
+
+<ArchitectureFlow
+  nodes={[
+    { label: "Onboard Sensors", detail: "temperature · humidity" },
+    { label: "STM32 MCU", detail: "sensor polling · data formatting" },
+    { label: "I2C LCD", detail: "real-time local display" },
+    { label: "IoT Endpoint", detail: "HTTP POST to ThingSpeak" },
+    { label: "ThingSpeak", detail: "cloud dashboard · historical charts" }
+  ]}
+/>
+
+## Implementation
+
+The STM32 polls onboard temperature and humidity sensors at a configurable interval. Readings are formatted and displayed on an external I2C-connected LCD for local monitoring. Simultaneously, the data is uploaded to MathWorks ThingSpeak via IoT HTTP endpoints, providing remote access to real-time and historical sensor data through cloud-hosted dashboards.
+
+## Lessons Learned
+
+- **I2C is unforgiving** — timing, pull-up resistors, and address conflicts are hardware debugging problems that no compiler catches.
+- **Bare-metal constraints sharpen thinking** — no dynamic allocation, no garbage collector, no OS scheduler. Every byte and cycle is accounted for.
+- **Cloud integration adds latency** — the HTTP upload path is the slowest component by orders of magnitude; buffering and retry logic matter.

@@ -1,47 +1,68 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ArrowUpRight, Clock } from "lucide-react";
 import { getBlogDocs, formatDate } from "@/lib/content";
 
 export const metadata: Metadata = {
   title: "Blog",
-  description: "Technical writing on engines, systems, and performance."
+  description: "In-depth technical writing on multi-agent AI, C++ systems, OpenGL graphics, numerical physics, and concurrent databases."
 };
 
 export default function BlogPage() {
   const posts = getBlogDocs();
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-5 pb-24 pt-12 sm:px-8 sm:pt-16">
+    <main className="mx-auto w-full max-w-4xl px-5 pb-24 pt-12 sm:px-8 sm:pt-16">
       <header>
-        <p className="mono-label">Technical writing</p>
-        <h1 className="mt-3 text-4xl font-bold tracking-tight text-ink sm:text-5xl">Blog</h1>
-        <p className="mt-4 max-w-prose text-lg leading-relaxed text-ink/60">
-          Deep dives on the problems I actually hit — search algorithms, bit-level
-          representation, and packet capture. Written to be indexed by Google and read by
-          engineers.
+        <p className="mono-label">Engineering Publications</p>
+        <h1 className="mt-3 text-4xl font-extrabold tracking-tight text-ink sm:text-5xl">
+          Technical Writing
+        </h1>
+        <p className="mt-4 max-w-2xl text-lg leading-relaxed text-ink/65">
+          First-principles technical breakdowns on autonomous multi-agent DAG architectures,
+          allocation-free spatial hashing in C++, real-time Navier-Stokes solvers, concurrent database locking, and bitboard game trees.
         </p>
       </header>
 
-      <div className="mt-12 space-y-2">
+      <div className="mt-12 space-y-4">
         {posts.map((post) => (
           <Link
             key={post.slug}
             href={`/blog/${post.slug}`}
-            className="group -mx-3 flex flex-col gap-1 rounded-lg px-3 py-4 transition-colors hover:bg-muted"
+            className="glass-card hover-lift group block rounded-xl p-6 transition-all"
           >
-            <div className="flex items-center gap-3">
-              <h2 className="text-lg font-medium tracking-tight text-ink group-hover:text-accent">
-                {post.title}
-              </h2>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 font-mono text-ink/50">
+                <span>{formatDate(post.date)}</span>
+                <span>·</span>
+                <span className="inline-flex items-center gap-1">
+                  <Clock size={12} />
+                  {post.minutes} min read
+                </span>
+              </div>
+              <span className="font-mono text-xs text-accent opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1">
+                Read article <ArrowUpRight size={13} />
+              </span>
             </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-ink/45">
-              <span>{formatDate(post.date)}</span>
-              <span>·</span>
-              <span>{post.minutes} min read</span>
-              <span>·</span>
-              <span>{post.tags.join(" · ")}</span>
+
+            <h2 className="mt-2 text-xl font-bold tracking-tight text-ink group-hover:text-accent transition-colors">
+              {post.title}
+            </h2>
+
+            <p className="mt-2 text-sm leading-relaxed text-ink/70">
+              {post.description}
+            </p>
+
+            <div className="mt-4 flex flex-wrap gap-1.5 pt-2">
+              {post.tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="rounded border border-line/8 bg-muted/60 px-2 py-0.5 font-mono text-[10px] text-ink/60"
+                >
+                  {tag}
+                </span>
+              ))}
             </div>
-            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-ink/55">{post.description}</p>
           </Link>
         ))}
       </div>

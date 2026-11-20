@@ -1,0 +1,49 @@
+---
+title: Tiny Fluid Simulator
+subtitle: Real-time 2D Navier-Stokes fluid dynamics
+status: Finished
+year: 2026
+description: A real-time 2D Eulerian fluid simulator solving the incompressible Navier-Stokes equations on a 160×160 staggered grid with GPU-streamed visualization.
+tech: [C++17, OpenGL, Navier-Stokes, Jos Stam, GLSL, GLFW]
+github: https://github.com/PrithviRe/TinyFluidSimulator
+featured: false
+order: 7
+---
+
+Fluid simulation is where physics meets numerical methods. The Navier-Stokes equations describe how velocity and pressure evolve in a fluid — but solving them directly is intractable. Jos Stam's "Stable Fluids" method trades physical accuracy for unconditional stability, making real-time simulation possible on a CPU.
+
+## Problem
+
+A direct numerical solve of Navier-Stokes on a 160×160 grid needs to handle advection, diffusion, and pressure projection every frame without blowing up. Explicit methods are fast but explode at high timesteps. Implicit methods are stable but slow. The challenge is finding the sweet spot.
+
+## Architecture
+
+<ArchitectureFlow
+  nodes={[
+    { label: "Input", detail: "mouse position · velocity injection" },
+    { label: "Advection", detail: "semi-Lagrangian · bilinear interpolation" },
+    { label: "Diffusion", detail: "implicit Gauss-Seidel relaxation" },
+    { label: "Pressure Projection", detail: "Helmholtz-Hodge · Poisson solve" },
+    { label: "GPU Visualization", detail: "glTexSubImage2D · thermal/velocity palettes" }
+  ]}
+/>
+
+## The solver
+
+### Semi-Lagrangian advection
+
+Instead of pushing fluid forward (which is unstable), semi-Lagrangian advection traces each grid cell backward in time along the velocity field and samples the value at the departure point using bilinear interpolation. This is unconditionally stable regardless of timestep.
+
+### Pressure projection
+
+Mass conservation requires the velocity field to be divergence-free (∇ · **u** = 0). Helmholtz-Hodge decomposition splits the velocity field into a divergence-free part and a gradient part. The Poisson pressure equation is solved iteratively using Gauss-Seidel relaxation, and the gradient of pressure is subtracted from the velocity field.
+
+### GPU visualization
+
+The CPU computes the fluid state; the GPU displays it. An asynchronous texture upload via `glTexSubImage2D` streams the density/velocity field to the GPU every frame. Multiple palette modes — thermal gradient and velocity magnitude — provide different views into the simulation.
+
+## Lessons Learned
+
+- **Stability beats accuracy** — Jos Stam's method introduces numerical diffusion, but it never explodes. For real-time visualization, that tradeoff is correct.
+- **Gauss-Seidel converges fast enough** — a few dozen iterations per frame produce visually convincing pressure projection.
+- **Texture streaming is cheap** — `glTexSubImage2D` on a 160×160 texture is negligible compared to the CPU solve.

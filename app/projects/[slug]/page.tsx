@@ -35,7 +35,7 @@ export default async function ProjectPage({ params }: Props) {
   const next = docs[index + 1];
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-5 pb-24 pt-10 sm:px-8 sm:pt-14">
+    <main className="mx-auto w-full max-w-4xl px-5 pb-24 pt-10 sm:px-8 sm:pt-14">
       {/* Back link */}
       <Link
         href="/projects"
@@ -46,19 +46,24 @@ export default async function ProjectPage({ params }: Props) {
 
       {/* Header */}
       <header className="mt-8">
-        <p className="mono-label">
-          {doc.status} · {doc.year}
-        </p>
-        <h1 className="mt-3 text-4xl font-bold tracking-tight text-ink sm:text-5xl">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-line/10 bg-muted px-2.5 py-0.5 font-mono text-xs text-ink/65">
+            <span className={doc.status === "In Progress" ? "h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" : "h-1.5 w-1.5 rounded-full bg-emerald-500"} />
+            {doc.status}
+          </span>
+          <span className="mono-label">· {doc.year}</span>
+        </div>
+
+        <h1 className="mt-4 text-4xl font-extrabold tracking-tight text-ink sm:text-5xl">
           {doc.title}
         </h1>
-        <p className="mt-3 text-lg text-ink/60">{doc.subtitle}</p>
+        <p className="mt-2 text-lg text-ink/60">{doc.subtitle}</p>
 
         <div className="mt-5 flex flex-wrap gap-2">
           {doc.tech.map((t) => (
             <span
               key={t}
-              className="rounded-md border border-line/10 bg-muted px-2 py-1 font-mono text-[11px] text-ink/70"
+              className="rounded-md border border-line/10 bg-muted px-2.5 py-1 font-mono text-xs text-ink/75"
             >
               {t}
             </span>
@@ -69,18 +74,18 @@ export default async function ProjectPage({ params }: Props) {
           {doc.github && (
             <Button asChild>
               <a href={doc.github} target="_blank" rel="noopener noreferrer">
-                <Github size={15} /> GitHub
+                <Github size={15} /> GitHub Repository
               </a>
             </Button>
           )}
-          {doc.demo && (
+          {doc.demo && doc.demo !== "#" && (
             <Button asChild variant="outline">
               <a href={doc.demo} target="_blank" rel="noopener noreferrer">
                 <ExternalLink size={15} /> Live Demo
               </a>
             </Button>
           )}
-          {doc.docs && (
+          {doc.docs && doc.docs !== "#" && (
             <Button asChild variant="outline">
               <a href={doc.docs} target="_blank" rel="noopener noreferrer">
                 Documentation

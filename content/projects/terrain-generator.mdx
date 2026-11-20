@@ -1,0 +1,41 @@
+---
+title: Procedural Terrain Generator
+subtitle: Fractal terrain synthesis with multi-biome shading
+status: Finished
+year: 2026
+description: A procedural 3D terrain visualizer synthesizing fractal elevation meshes via multi-octave fBm Perlin noise with elevation-driven biome shading and atmospheric fog.
+tech: [C++17, OpenGL, Perlin Noise, fBm, GLM, CMake]
+github: https://github.com/PrithviRe/ProceduralTerrainGenerator
+featured: false
+order: 8
+---
+
+Procedural terrain generation is the intersection of noise functions and rendering — a heightmap derived from mathematical noise, shaded to look like a real landscape. No artist-painted textures, no hand-sculpted geometry. Everything is a function of position.
+
+## Architecture
+
+<ArchitectureFlow
+  nodes={[
+    { label: "Noise Generator", detail: "multi-octave fBm Perlin noise" },
+    { label: "Mesh Builder", detail: "heightmap → vertex grid · normal calculation" },
+    { label: "Biome Shader", detail: "5 elevation bands · procedural blending" },
+    { label: "Lighting", detail: "Blinn-Phong · atmospheric distance fog" },
+    { label: "Controls", detail: "wireframe toggle · parameter tuning" }
+  ]}
+/>
+
+## Implementation
+
+**Fractal Brownian Motion (fBm)** layers multiple octaves of Perlin noise at increasing frequency and decreasing amplitude. The result is terrain with both large-scale mountain ranges and fine-grained surface detail.
+
+**Surface normals** are computed using central-difference height gradients — sample the heightmap at four neighboring points and cross the differences. This avoids storing explicit normals and updates automatically when parameters change.
+
+**Biome shading** maps elevation to five geological bands — water, sand, grass, rock, and snow — with smooth blending at transitions. The shader reads elevation directly from the vertex and interpolates between palette colors.
+
+**Atmospheric fog** fades distant geometry toward a sky color based on fragment depth, adding depth cues without post-processing.
+
+## Lessons Learned
+
+- **Noise is composable** — fBm is just weighted sums of noise at different scales, but the visual result is dramatically richer than any single octave.
+- **Normals from finite differences** — numerical normal calculation is simpler and more flexible than storing face normals, especially for dynamic geometry.
+- **Wireframe mode is a debugging tool** — seeing the mesh triangle density reveals where resolution is wasted.

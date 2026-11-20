@@ -1,0 +1,200 @@
+---
+title: "Allocation-Free Spatial Hashing in C++: Scaling Flocking Simulations from O(N²) to O(N)"
+date: "2026-11-04"
+description: "How a uniform spatial hash grid built with linked-list bucket arrays and GPU hardware instancing simulates 7,000+ interactive boids at 60 FPS without touching the heap in the hot loop."
+tags: [C++, OpenGL, Graphics, Algorithms, Performance]
+minutes: 10
+---
+
+Simulating emergent flocking behavior using Craig Reynolds' Boids algorithm is conceptually straightforward: each agent obeys three local rules—**Separation** (avoid crowding neighbors), **Alignment** (steer toward the average heading of neighbors), and **Cohesion** (steer toward the average center of mass of neighbors).
+
+The mathematical beauty of the algorithm lies in its decentralized nature: complex, lifelike group dynamics emerge organically without a central coordinator.
+
+The systems programming nightmare, however, is its algorithmic complexity:
+
+```text
+O(N²)
+```
+
+If every boid must check its distance to every other boid, a simulation with N = 7,000 boids requires 49,000,000 distance checks per frame. At 60 frames per second, a single CPU core has approximately **16.6 milliseconds** to run physics, enforce boundaries, integrate velocities, and submit geometry to the GPU. 
+
+49 million distance checks in 16ms translates to approximately **0.34 nanoseconds per pair**. That is less than a single CPU clock cycle on a modern 4.0 GHz processor.
+
+Here is how I designed an allocation-free uniform spatial hash grid in C++17 to bring neighbor search down to **O(N)**, combined with OpenGL 3.3 GPU hardware instancing to eliminate draw call overhead.
+
+## The Fallacy of `std::unordered_map`
+
+When developers first learn spatial hashing, the intuitive C++ implementation looks like this:
+
+```cpp
+// ANTI-PATTERN: DO NOT USE IN HOT LOOPS
+std::unordered_map<int, std::vector<int>> grid;
+
+void buildGrid(const std::vector<Boid>& boids) {
+    grid.clear();
+    for (int i = 0; i < boids.size(); ++i) {
+        int cellHash = hashPos(boids[i].pos);
+        grid[cellHash].push_back(i);
+    }
+}
+```
+
+This code is completely unusable for high-frequency real-time simulation. Why?
+1. **Dynamic Heap Allocation**: `push_back` on nested `std::vector` instances triggers unpredictable heap allocations, calls to `malloc`, and cache thrashing.
+2. **Pointer Chasing**: `std::unordered_map` utilizes chained buckets with linked node allocations. Traversal means constantly following pointers across disjoint heap memory, destroying L1/L2 cache prefetching.
+3. **Rehashing Overhead**: As cell counts fluctuate, the map reallocates and rehashes its internal bucket table.
+
+To hit consistent 60+ FPS, we need **zero heap allocations in the hot loop** and **contiguous array layouts**.
+
+## The Allocation-Free Linked-List Bucket Grid
+
+Instead of standard containers, we can implement an explicit bucket array using two flat arrays:
+
+- `m_head[NUM_CELLS]`: Stores the index of the first boid in each cell (initialized to `-1`).
+- `m_next[MAX_BOIDS]`: Stores the index of the next boid in the same cell's linked list.
+
+```cpp
+class SpatialHashGrid {
+public:
+    static constexpr int CELL_SIZE = 32;       // Neighbor query radius
+    static constexpr int GRID_WIDTH = 64;      // Grid dimensions in cells
+    static constexpr int GRID_HEIGHT = 64;
+    static constexpr int NUM_CELLS = GRID_WIDTH * GRID_HEIGHT;
+    static constexpr int MAX_BOIDS = 10000;
+
+    SpatialHashGrid() {
+        m_head.fill(-1);
+    }
+
+    void clear() {
+        // Fast reset: contiguous memory write
+        std::fill(m_head.begin(), m_head.end(), -1);
+    }
+
+    void insert(int boidIndex, float x, float y) {
+        int cx = std::clamp(static_cast<int>(x / CELL_SIZE), 0, GRID_WIDTH - 1);
+        int cy = std::clamp(static_cast<int>(y / CELL_SIZE), 0, GRID_HEIGHT - 1);
+        int cell = cy * GRID_WIDTH + cx;
+
+        // Prepend boidIndex to the linked list of this cell
+        m_next[boidIndex] = m_head[cell];
+        m_head[cell] = boidIndex;
+    }
+
+private:
+    std::array<int, NUM_CELLS> m_head;
+    std::array<int, MAX_BOIDS> m_next;
+};
+```
+
+### Why This Is Fast
+
+1. **Zero Allocations**: Memory for `m_head` and `m_next` is preallocated once at application startup. Inserting all 7,000 boids requires exactly 7,000 array writes and zero calls to `new` or `malloc`.
+2. **Dense Memory Footprint**: `m_head` and `m_next` for 10,000 agents consume less than 64 KB of memory—fitting comfortably inside the CPU's **L2 cache**.
+3. **Trivial Reset**: Rebuilding the grid each frame requires only a `std::fill` of `-1` across `m_head`. There is no need to clear `m_next` because unreferenced elements are never traversed.
+
+## Querying the 9-Cell Neighborhood
+
+For any given boid, its interaction radius (r = 32px) is bounded by the cell dimensions. Therefore, potential neighbors can *only* exist in the boid's current cell and its 8 adjacent neighbor cells:
+
+```cpp
+template <typename Callback>
+void queryNeighbors(int boidIndex, float x, float y, float radius, Callback&& callback) {
+    int minX = std::max(0, static_cast<int>((x - radius) / CELL_SIZE));
+    int maxX = std::min(GRID_WIDTH - 1, static_cast<int>((x + radius) / CELL_SIZE));
+    int minY = std::max(0, static_cast<int>((y - radius) / CELL_SIZE));
+    int maxY = std::min(GRID_HEIGHT - 1, static_cast<int>((y + radius) / CELL_SIZE));
+
+    float radiusSq = radius * radius;
+
+    for (int cy = minY; cy <= maxY; ++cy) {
+        int rowOffset = cy * GRID_WIDTH;
+        for (int cx = minX; cx <= maxX; ++cx) {
+            int cell = rowOffset + cx;
+            int curr = m_head[cell];
+
+            while (curr != -1) {
+                if (curr != boidIndex) {
+                    float dx = m_boids[curr].x - x;
+                    float dy = m_boids[curr].y - y;
+                    float distSq = dx * dx + dy * dy;
+
+                    if (distSq < radiusSq) {
+                        callback(curr, distSq, dx, dy);
+                    }
+                }
+                curr = m_next[curr];
+            }
+        }
+    }
+}
+```
+
+Instead of checking 7,000 boids, a query inspects an average of 15 to 40 boids in the surrounding cells. The global complexity drops from **O(N²)** to **O(N)**.
+
+## Hardware Instanced Rendering in OpenGL
+
+Even with an O(N) physics update, issuing 7,000 individual OpenGL draw calls (`glDrawArrays`) will instantly bottleneck the driver on CPU submission overhead.
+
+We solve this using **GPU Hardware Instancing** (`glDrawArraysInstanced`):
+
+1. A single unit triangle mesh (3 vertices) is uploaded to a static VBO.
+2. A secondary dynamic instance VBO stores per-instance data:
+   - `vec2 aOffset`: Boid position (x, y).
+   - `float aAngle`: Heading orientation in radians.
+   - `vec3 aColor`: Speed-based velocity gradient color.
+
+```cpp
+// Single draw call renders all 7,000+ boids
+glBindVertexArray(m_vao);
+glBindBuffer(GL_ARRAY_BUFFER, m_instanceVBO);
+glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(InstanceData), m_instanceBuffer.data());
+
+glDrawArraysInstanced(GL_TRIANGLES, 0, 3, count);
+```
+
+In the vertex shader, rotation and translation are calculated on-chip per instance:
+
+```glsl
+#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aOffset;
+layout (location = 2) in float aAngle;
+layout (location = 3) in vec3 aColor;
+
+out vec3 FragColor;
+
+uniform mat4 uProjection;
+
+void main() {
+    float cosA = cos(aAngle);
+    float sinA = sin(aAngle);
+    
+    // Rotate local vertex
+    vec2 rotated = vec2(
+        aPos.x * cosA - aPos.y * sinA,
+        aPos.x * sinA + aPos.y * cosA
+    );
+    
+    gl_Position = uProjection * vec4(rotated + aOffset, 0.0, 1.0);
+    FragColor = aColor;
+}
+```
+
+## Performance Benchmarks
+
+Running on an AMD Ryzen 7 processor and NVIDIA GTX GPU (single CPU thread physics):
+
+| Metric | Naive O(N²) Approach | Allocation-Free Spatial Hash Grid |
+| :--- | :--- | :--- |
+| **Max Boids at 60 FPS** | ~800 boids | **7,500+ boids** |
+| **Grid Insertion Time** | N/A | **0.18 ms** (7,000 boids) |
+| **Physics Query Time** | ~28.4 ms (at 2,000 boids) | **4.1 ms** (at 7,000 boids) |
+| **Runtime Heap Allocations** | Millions per second | **0** |
+| **GPU Draw Calls** | 7,000 calls / frame | **1 call / frame** |
+
+## Lessons for High-Performance C++
+
+1. **Containers in hot loops are liabilities.** If your simulation loop calls `std::vector::push_back` or touches a `std::map`, you are sacrificing performance to memory fragmentation. Flat arrays and static index arrays will outperform dynamic containers every time.
+2. **Structure of arrays vs. linked heads.** The `m_head` / `m_next` structure proves that linked lists can be cache-friendly—provided they live in flat, contiguous memory.
+3. **Graphics and physics must be co-designed.** A 4ms physics loop is useless if your renderer wastes 12ms pushing individual matrix transforms to OpenGL. Batch everything with instanced arrays.
